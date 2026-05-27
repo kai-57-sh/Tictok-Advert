@@ -52,12 +52,16 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
-            // Guarantee DB is seeded with our rich mock advertising campaign
-            repository.populateMockDataIfEmpty()
+            // Seed Room from the bundled offline ad package.
+            repository.populateAdsIfNeeded(application)
             
-            // Trigger background downloads for offline experience and < 1.5s latency
+            // Backfill remote videos only when a bundled local file is unavailable.
             val ads = repository.allAdsFlow.first()
-            ads.filter { it.cardType == "video" && it.localVideoPath == null }.forEach { ad ->
+            ads.filter {
+                it.cardType == "video" &&
+                    it.localVideoPath == null &&
+                    it.videoUrl.isNotBlank()
+            }.forEach { ad ->
                 launch {
                     val path = repository.downloadVideoLocally(application, ad.id, ad.videoUrl)
                     if (path != null) {

@@ -38,6 +38,7 @@ import com.example.data.AdEntity
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -205,13 +206,13 @@ fun DetailsScreen(
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                if (ad.cardType == "video" && ad.videoUrl.isNotEmpty()) {
+                if (ad.cardType == "video" && (ad.localVideoPath != null || ad.videoUrl.isNotBlank())) {
                     var isVideoPlaying by remember { mutableStateOf(true) }
                     var isPreparing by remember { mutableStateOf(true) }
                     Box(modifier = Modifier.fillMaxSize()) {
                         if (isPreparing) {
                             AsyncImage(
-                                model = ad.coverUrl,
+                                model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
@@ -285,7 +286,7 @@ fun DetailsScreen(
                 } else {
                     // Portrait styled AsyncImage
                     AsyncImage(
-                        model = ad.coverUrl,
+                        model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
                         contentDescription = ad.title,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop

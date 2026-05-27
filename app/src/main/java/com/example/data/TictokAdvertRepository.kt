@@ -13,6 +13,8 @@ import java.io.FileOutputStream
 class TictokAdvertRepository(private val adDao: AdDao) {
     companion object {
         private const val TAG = "TictokRepository"
+        private const val OFFLINE_AD_PREFS = "offline_ad_bundle_prefs"
+        private const val OFFLINE_AD_VERSION_KEY = "offline_ad_bundle_version"
     }
 
     // Flows for general use
@@ -202,19 +204,42 @@ class TictokAdvertRepository(private val adDao: AdDao) {
     }
 
     /**
-     * Populate standard high-quality advertising data if empty in database.
+     * Populate Room with the bundled offline ad package. Falls back to the
+     * previous in-memory mock generator if the asset bundle is unavailable.
      */
-    suspend fun populateMockDataIfEmpty() {
+    suspend fun populateAdsIfNeeded(context: Context) {
         val allAds = adDao.getAllAds()
-        val count = allAds.size
-        // Trigger re-population if we don't have the full 100-item set yet
-        if (count >= 100) {
-            Log.d(TAG, "Database already populated with $count ads.")
+        try {
+            val prefs = context.getSharedPreferences(OFFLINE_AD_PREFS, Context.MODE_PRIVATE)
+            val importedVersion = prefs.getString(OFFLINE_AD_VERSION_KEY, null)
+            val bundledVersion = OfflineAdBundleLoader.getBundleVersion(context)
+            val hasFullBundle = allAds.size >= 100 && allAds.all { !it.localCoverPath.isNullOrBlank() }
+            val shouldReloadBundle = importedVersion != bundledVersion || !hasFullBundle
+
+            if (!shouldReloadBundle) {
+                Log.d(TAG, "Database already matches offline ad bundle version $bundledVersion.")
+                return
+            }
+
+            val bundle = OfflineAdBundleLoader.loadBundle(context)
+            require(bundle.ads.size >= 100) { "Bundled ad package contains fewer than 100 records." }
+
+            adDao.clearAllAnalytics()
+            adDao.clearAllAds()
+            adDao.insertAds(bundle.ads)
+            prefs.edit().putString(OFFLINE_AD_VERSION_KEY, bundle.version).apply()
+            Log.d(TAG, "Loaded ${bundle.ads.size} offline ads from bundled assets, version=${bundle.version}.")
             return
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load bundled ads, falling back to generated mock data: ${e.message}")
         }
 
-        Log.d(TAG, "Populating database with 100 high-quality ads for offline storage...")
-        
+        populateFallbackMockAds()
+    }
+
+    private suspend fun populateFallbackMockAds() {
+        Log.d(TAG, "Populating database with fallback generated ads...")
+
         adDao.clearAllAds()
 
         val channels = listOf("精选", "电商", "本地")
@@ -302,6 +327,6 @@ class TictokAdvertRepository(private val adDao: AdDao) {
         }
 
         adDao.insertAds(adItems)
-        Log.d(TAG, "100 Ads successfully preloaded to Room db.")
+        Log.d(TAG, "Fallback ad set preloaded to Room db.")
     }
 }

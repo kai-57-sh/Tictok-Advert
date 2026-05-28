@@ -11,7 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.AdEntity
 import com.example.data.AnalyticsEventEntity
 import com.example.data.AppContainer
-import com.example.data.GeminiHelper
+import com.example.data.QwenSearchHelper
 import com.example.data.SearchIntent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -57,11 +57,7 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
             
             // Backfill remote videos only when a bundled local file is unavailable.
             val ads = repository.allAdsFlow.first()
-            ads.filter {
-                it.cardType == "video" &&
-                    it.localVideoPath == null &&
-                    it.videoUrl.isNotBlank()
-            }.forEach { ad ->
+            ads.filter { it.cardType == "video" && it.localVideoPath == null && it.videoUrl.isNotBlank() }.forEach { ad ->
                 launch {
                     val path = repository.downloadVideoLocally(application, ad.id, ad.videoUrl)
                     if (path != null) {
@@ -193,14 +189,14 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * AI Conversational search processor - contacts Gemini for parsing intent.
+     * AI Conversational search processor - contacts Qwen3-32B for parsing intent.
      */
     fun performSearch(query: String) {
         if (query.isBlank()) return
         searchQuery = query
         viewModelScope.launch {
             isSearching = true
-            val resultIntent = GeminiHelper.parseSearchQuery(query)
+            val resultIntent = QwenSearchHelper.parseSearchQuery(query)
             parsedSearchIntent = resultIntent
 
             // Apply intent filter to database list

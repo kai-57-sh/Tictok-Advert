@@ -14,16 +14,14 @@ object OfflineAdBundleLoader {
     )
 
     fun getBundleVersion(context: Context): String {
-        val manifestText = context.assets.open(manifestAssetPath).bufferedReader().use { it.readText() }
-        val manifest = JSONObject(manifestText)
-        return manifest.optString("generatedAt").ifBlank { manifestText.hashCode().toString() }
+        val manifestPayload = readManifestPayload(context)
+        return resolveBundleVersion(manifestPayload.text, manifestPayload.json)
     }
 
     fun loadBundle(context: Context): OfflineAdBundle {
-        val manifestText = context.assets.open(manifestAssetPath).bufferedReader().use { it.readText() }
-        val manifest = JSONObject(manifestText)
-        val adsArray = manifest.getJSONArray("ads")
-        val version = manifest.optString("generatedAt").ifBlank { manifestText.hashCode().toString() }
+        val manifestPayload = readManifestPayload(context)
+        val adsArray = manifestPayload.json.getJSONArray("ads")
+        val version = resolveBundleVersion(manifestPayload.text, manifestPayload.json)
 
         val ads = buildList(adsArray.length()) {
             for (index in 0 until adsArray.length()) {
@@ -59,6 +57,23 @@ object OfflineAdBundleLoader {
             version = version,
             ads = ads
         )
+    }
+
+    private data class ManifestPayload(
+        val text: String,
+        val json: JSONObject
+    )
+
+    private fun readManifestPayload(context: Context): ManifestPayload {
+        val manifestText = context.assets.open(manifestAssetPath).bufferedReader().use { it.readText() }
+        return ManifestPayload(
+            text = manifestText,
+            json = JSONObject(manifestText)
+        )
+    }
+
+    private fun resolveBundleVersion(manifestText: String, manifest: JSONObject): String {
+        return manifest.optString("generatedAt").ifBlank { manifestText.hashCode().toString() }
     }
 
     private fun copyAssetToFilesDir(context: Context, assetPath: String): String {

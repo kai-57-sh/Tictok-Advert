@@ -2,6 +2,7 @@ package com.example.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.io.File
 
 @Entity(tableName = "ads")
 data class AdEntity(
@@ -26,11 +27,15 @@ data class AdEntity(
     val localVideoPath: String? = null,
     val localCoverPath: String? = null
 ) {
-    // Companion list parsing helper
     fun getTagList(): List<String> {
-        if (tags.isEmpty()) return emptyList()
         return tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
+
+    fun coverModel(): Any = localCoverPath?.let(::File) ?: coverUrl
+
+    fun videoSourcePath(): String = localVideoPath ?: videoUrl
+
+    fun hasPlayableVideo(): Boolean = cardType == "video" && videoSourcePath().isNotBlank()
 }
 
 @Entity(tableName = "analytics_events")

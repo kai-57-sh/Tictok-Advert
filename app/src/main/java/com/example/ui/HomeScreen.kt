@@ -41,7 +41,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.example.data.AdEntity
 import com.example.ui.theme.*
-import java.io.File
 
 @OptIn(ExperimentalAnimationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -516,7 +515,7 @@ fun BigImageAdCard(
 
             // Main Cover Image
             AsyncImage(
-                model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                model = ad.coverModel(),
                 contentDescription = ad.title,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -595,7 +594,7 @@ fun SmallImageAdCard(
             ) {
                 // Cover
                 AsyncImage(
-                    model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                    model = ad.coverModel(),
                     contentDescription = ad.title,
                     modifier = Modifier
                         .size(90.dp)
@@ -691,7 +690,7 @@ fun VideoAdCard(
                         // Keep cover image visible while preparing to avoid black screen
                         if (isPreparing) {
                             AsyncImage(
-                                model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                                model = ad.coverModel(),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
@@ -705,8 +704,7 @@ fun VideoAdCard(
                         AndroidView(
                             factory = { context ->
                                 VideoView(context).apply {
-                                    val videoPath = ad.localVideoPath ?: ad.videoUrl
-                                    setVideoPath(videoPath)
+                                    setVideoPath(ad.videoSourcePath())
                                     setOnPreparedListener { mp ->
                                         mp.isLooping = true
                                         mp.setVolume(0f, 0f)
@@ -745,7 +743,7 @@ fun VideoAdCard(
                 } else {
                     // Static Cover Image
                     AsyncImage(
-                        model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                        model = ad.coverModel(),
                         contentDescription = ad.title,
                         modifier = Modifier
                             .fillMaxSize()

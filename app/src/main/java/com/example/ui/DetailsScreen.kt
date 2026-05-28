@@ -38,7 +38,6 @@ import com.example.data.AdEntity
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,11 +69,6 @@ fun DetailsScreen(
 
     // Reference to standard VideoView to save progress during exit lifecycle
     var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
-
-    // On Detail Enter - automatically log a Click count to the ad (enters detail means clicked)
-    LaunchedEffect(adId) {
-        viewModel.onAdClicked(adId)
-    }
 
     // On Detail Exit - save video progress
     DisposableEffect(Unit) {
@@ -206,13 +200,13 @@ fun DetailsScreen(
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                if (ad.cardType == "video" && (ad.localVideoPath != null || ad.videoUrl.isNotBlank())) {
+                if (ad.hasPlayableVideo()) {
                     var isVideoPlaying by remember { mutableStateOf(true) }
                     var isPreparing by remember { mutableStateOf(true) }
                     Box(modifier = Modifier.fillMaxSize()) {
                         if (isPreparing) {
                             AsyncImage(
-                                model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                                model = ad.coverModel(),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
@@ -226,8 +220,7 @@ fun DetailsScreen(
                         AndroidView(
                             factory = { context ->
                                 VideoView(context).apply {
-                                    val videoPath = ad.localVideoPath ?: ad.videoUrl
-                                    setVideoPath(videoPath)
+                                    setVideoPath(ad.videoSourcePath())
                                     setOnPreparedListener { mp ->
                                         mp.isLooping = true
                                         // Start audio enabled in details page for premium viewing experience
@@ -286,7 +279,7 @@ fun DetailsScreen(
                 } else {
                     // Portrait styled AsyncImage
                     AsyncImage(
-                        model = ad.localCoverPath?.let(::File) ?: ad.coverUrl,
+                        model = ad.coverModel(),
                         contentDescription = ad.title,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop

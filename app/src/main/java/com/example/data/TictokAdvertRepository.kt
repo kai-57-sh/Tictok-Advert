@@ -205,7 +205,7 @@ class TictokAdvertRepository(private val adDao: AdDao) {
 
     /**
      * Populate Room with the bundled offline ad package. Falls back to the
-     * previous in-memory mock generator if the asset bundle is unavailable.
+     * in-memory generated data set if the asset bundle is unavailable.
      */
     suspend fun populateAdsIfNeeded(context: Context) {
         val allAds = adDao.getAllAds()
@@ -213,8 +213,7 @@ class TictokAdvertRepository(private val adDao: AdDao) {
             val prefs = context.getSharedPreferences(OFFLINE_AD_PREFS, Context.MODE_PRIVATE)
             val importedVersion = prefs.getString(OFFLINE_AD_VERSION_KEY, null)
             val bundledVersion = OfflineAdBundleLoader.getBundleVersion(context)
-            val hasFullBundle = allAds.size >= 100 && allAds.all { !it.localCoverPath.isNullOrBlank() }
-            val shouldReloadBundle = importedVersion != bundledVersion || !hasFullBundle
+            val shouldReloadBundle = importedVersion != bundledVersion || !hasCompleteOfflineBundle(allAds)
 
             if (!shouldReloadBundle) {
                 Log.d(TAG, "Database already matches offline ad bundle version $bundledVersion.")
@@ -231,13 +230,17 @@ class TictokAdvertRepository(private val adDao: AdDao) {
             Log.d(TAG, "Loaded ${bundle.ads.size} offline ads from bundled assets, version=${bundle.version}.")
             return
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load bundled ads, falling back to generated mock data: ${e.message}")
+            Log.e(TAG, "Failed to load bundled ads, falling back to generated ads: ${e.message}")
         }
 
-        populateFallbackMockAds()
+        populateFallbackGeneratedAds()
     }
 
-    private suspend fun populateFallbackMockAds() {
+    private fun hasCompleteOfflineBundle(ads: List<AdEntity>): Boolean {
+        return ads.size >= 100 && ads.all { !it.localCoverPath.isNullOrBlank() }
+    }
+
+    private suspend fun populateFallbackGeneratedAds() {
         Log.d(TAG, "Populating database with fallback generated ads...")
 
         adDao.clearAllAds()

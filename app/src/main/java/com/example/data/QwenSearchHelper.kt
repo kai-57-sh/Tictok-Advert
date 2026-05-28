@@ -18,10 +18,11 @@ data class SearchIntent(
     val explanation: String
 )
 
-object GeminiHelper {
-    private const val TAG = "GeminiHelper"
-    private const val MODEL_NAME = "gemini-3.5-flash"
-    private const val API_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
+object QwenSearchHelper {
+    private const val TAG = "QwenSearchHelper"
+    private const val MODEL_NAME = "Qwen/Qwen3-32B"
+    private const val API_URL = "https://api-inference.modelscope.cn/v1/chat/completions"
+    private const val ENABLE_THINKING = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -30,19 +31,19 @@ object GeminiHelper {
         .build()
 
     /**
-     * Parses the natural language query into structural filters using Gemini 3.5 Flash.
-     * Falls back to high-quality keyword parsing if the API fails or key is missing.
+     * Parses the natural language query into structural filters using Qwen3-32B.
+     * Falls back to a local keyword parser if the API fails or the key is missing.
      */
     suspend fun parseSearchQuery(query: String): SearchIntent = withContext(Dispatchers.IO) {
         val apiKey = try {
-            BuildConfig.GEMINI_API_KEY
+            BuildConfig.MODELSCOPE_API_KEY
         } catch (e: Exception) {
             ""
         }
 
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey.contains("PLACEHOLDER")) {
-            Log.w(TAG, "Gemini API Key is missing or default. Using high-quality local parser.")
-            return@withContext parseMockQuery(query)
+        if (apiKey.isEmpty() || apiKey == "MY_MODELSCOPE_API_KEY" || apiKey.contains("PLACEHOLDER")) {
+            Log.w(TAG, "ModelScope API Key is missing or default. Using high-quality local parser.")
+            return@withContext parseFallbackQuery(query)
         }
 
         val systemPrompt = """
@@ -70,52 +71,51 @@ object GeminiHelper {
         """.trimIndent()
 
         val jsonRequest = JSONObject().apply {
-            put("contents", JSONArray().apply {
+            put("model", MODEL_NAME)
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemPrompt)
+                })
                 put(JSONObject().apply {
                     put("role", "user")
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().apply { put("text", "User query: $query") })
-                    })
+                    put("content", "User query: $query")
                 })
             })
-            put("systemInstruction", JSONObject().apply {
-                put("parts", JSONArray().apply {
-                    put(JSONObject().apply { put("text", systemPrompt) })
-                })
-            })
-            put("generationConfig", JSONObject().apply {
-                put("responseMimeType", "application/json")
-                put("temperature", 0.2)
+            put("temperature", 0.2)
+            put("stream", false)
+            put("extra_body", JSONObject().apply {
+                put("enable_thinking", ENABLE_THINKING)
             })
         }
 
         try {
-            val urlWithKey = "$API_URL?key=$apiKey"
             val requestBody = jsonRequest.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
-                .url(urlWithKey)
+                .url(API_URL)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .addHeader("Content-Type", "application/json")
                 .post(requestBody)
                 .build()
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errString = response.body?.string() ?: "Unknown error"
-                    Log.e(TAG, "Gemini API request failed: code ${response.code}, body: $errString")
-                    return@withContext parseMockQuery(query)
+                    Log.e(TAG, "Qwen API request failed: code ${response.code}, body: $errString")
+                    return@withContext parseFallbackQuery(query)
                 }
 
                 val bodyStr = response.body?.string() ?: ""
-                Log.d(TAG, "Gemini Raw Response: $bodyStr")
+                Log.d(TAG, "Qwen Raw Response: $bodyStr")
                 val responseJson = JSONObject(bodyStr)
-                val candidates = responseJson.optJSONArray("candidates")
-                val firstCandidate = candidates?.optJSONObject(0)
-                val content = firstCandidate?.optJSONObject("content")
-                val parts = content?.optJSONArray("parts")
-                val firstPart = parts?.optJSONObject(0)
-                val textOutput = firstPart?.optString("text") ?: ""
+                val choices = responseJson.optJSONArray("choices")
+                val firstChoice = choices?.optJSONObject(0)
+                val message = firstChoice?.optJSONObject("message")
+                val textOutput = message?.optString("content")
+                    ?: ""
 
-                val cleanText = textOutput.trim().removeSurrounding("```json", "```").trim()
-                Log.d(TAG, "Gemini Clean Text: $cleanText")
+                val cleanText = cleanJsonPayload(textOutput)
+                Log.d(TAG, "Qwen Clean Text: $cleanText")
 
                 val parsedJson = JSONObject(cleanText)
                 val channel = if (parsedJson.isNull("channel")) null else parsedJson.getString("channel")
@@ -129,15 +129,15 @@ object GeminiHelper {
                 SearchIntent(channel, tags, explanation)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error invoking Gemini API: ${e.message}", e)
-            parseMockQuery(query)
+            Log.e(TAG, "Error invoking Qwen API: ${e.message}", e)
+            parseFallbackQuery(query)
         }
     }
 
     /**
-     * Highly responsive keyword rule-based mock query parsing as a flawless local fallback.
+     * Highly responsive keyword rule-based local parsing used as the offline fallback.
      */
-    fun parseMockQuery(query: String): SearchIntent {
+    fun parseFallbackQuery(query: String): SearchIntent {
         val lowercaseQuery = query.lowercase()
         val tags = mutableListOf<String>()
         var channel: String? = null
@@ -187,5 +187,23 @@ object GeminiHelper {
         }
 
         return SearchIntent(channel, tags, explanation)
+    }
+
+    private fun cleanJsonPayload(rawText: String): String {
+        val trimmed = rawText.trim()
+        if (trimmed.startsWith("```")) {
+            return trimmed
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+        }
+        val firstBrace = trimmed.indexOf('{')
+        val lastBrace = trimmed.lastIndexOf('}')
+        return if (firstBrace >= 0 && lastBrace > firstBrace) {
+            trimmed.substring(firstBrace, lastBrace + 1)
+        } else {
+            trimmed
+        }
     }
 }

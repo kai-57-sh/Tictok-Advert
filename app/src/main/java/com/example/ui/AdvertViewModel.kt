@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.AdEntity
 import com.example.data.AnalyticsEventEntity
 import com.example.data.AppContainer
+import com.example.data.CommentEntity
 import com.example.data.QwenSearchHelper
 import com.example.data.SearchIntent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,10 +20,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class AdvertViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        const val COMMENT_MAX_LENGTH = 120
+    }
 
     private val repository = AppContainer.repository
 
@@ -37,6 +42,9 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
     // UI state for Loading / Refreshing simulation
     var isRefreshing by mutableStateOf(false)
         private set
+
+    private val _refreshTokens = mutableStateMapOf<String, Int>()
+    val refreshTokens: Map<String, Int> get() = _refreshTokens
 
     // Active video progress store to resume seamlessly (adId -> positionMs)
     private val _videoProgressMap = mutableStateMapOf<String, Int>()
@@ -113,10 +121,12 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
      * Pull down simulation: triggers content reload, simulated network latency,
      * resets local temporary flows and increments views where scrolling.
      */
-    fun refreshContent() {
+    fun refreshContent(channel: String = selectedChannel) {
+        if (isRefreshing) return
         viewModelScope.launch {
             isRefreshing = true
-            kotlinx.coroutines.delay(800) // Aesthetic delay for premium load feel
+            kotlinx.coroutines.delay(800)
+            _refreshTokens[channel] = (_refreshTokens[channel] ?: 0) + 1
             isRefreshing = false
         }
     }
@@ -188,6 +198,19 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
         return _videoProgressMap[adId] ?: 0
     }
 
+    fun getComments(adId: String): Flow<List<CommentEntity>> {
+        return repository.getCommentsByAdIdFlow(adId)
+    }
+
+    fun addComment(adId: String, content: String) {
+        val normalizedContent = content.trim()
+        if (normalizedContent.isEmpty()) return
+        val limitedContent = normalizedContent.take(COMMENT_MAX_LENGTH)
+        viewModelScope.launch {
+            repository.addComment(adId, limitedContent)
+        }
+    }
+
     /**
      * AI Conversational search processor - contacts Qwen3-32B for parsing intent.
      */
@@ -241,6 +264,7 @@ class AdvertViewModel(application: Application) : AndroidViewModel(application) 
             repository.resetStats()
             _videoProgressMap.clear()
             _activeFilters.clear()
+            _refreshTokens.clear()
         }
     }
 }

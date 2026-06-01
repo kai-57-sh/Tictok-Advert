@@ -48,3 +48,12 @@ data class AnalyticsEventEntity(
     val channel: String,
     val cardType: String
 )
+
+@Entity(tableName = "comments")
+data class CommentEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val adId: String,
+    val authorName: String,
+    val content: String,
+    val createdAt: Long = System.currentTimeMillis()
+)

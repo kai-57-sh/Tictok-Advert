@@ -40,6 +40,12 @@ interface AdDao {
     @Query("SELECT * FROM analytics_events ORDER BY timestamp DESC LIMIT 50")
     fun getAllAnalyticsEventsFlow(): Flow<List<AnalyticsEventEntity>>
 
+    @Query("SELECT * FROM comments WHERE adId = :adId ORDER BY createdAt DESC, id DESC")
+    fun getCommentsByAdIdFlow(adId: String): Flow<List<CommentEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertComment(comment: CommentEntity)
+
     @Query("SELECT COUNT(*) FROM analytics_events WHERE eventType = 'view'")
     fun getExposureCountFlow(): Flow<Int>
 
@@ -54,4 +60,7 @@ interface AdDao {
 
     @Query("DELETE FROM ads")
     suspend fun clearAllAds()
+
+    @Query("DELETE FROM comments")
+    suspend fun clearAllComments()
 }

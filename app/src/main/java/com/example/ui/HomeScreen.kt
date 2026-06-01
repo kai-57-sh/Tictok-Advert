@@ -4,7 +4,6 @@ import android.widget.VideoView
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,26 +11,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,8 +39,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.example.data.AdEntity
 import com.example.ui.theme.*
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlin.random.Random
 
-@OptIn(ExperimentalAnimationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: AdvertViewModel,
@@ -50,7 +51,7 @@ fun HomeScreen(
     onNavigateToSearch: () -> Unit,
     onNavigateToStats: () -> Unit
 ) {
-    // Scroll states memory per channel for "返回位置保持" (retaining return scroll position)
+    val coroutineScope = rememberCoroutineScope()
     val listStates = remember {
         mapOf(
             "精选" to LazyListState(),
@@ -58,27 +59,70 @@ fun HomeScreen(
             "本地" to LazyListState()
         )
     }
-    val activeState = listStates[viewModel.selectedChannel] ?: rememberLazyListState()
-
-    // Controlled active playing ad ID in the feed
     var playingAdId by remember { mutableStateOf<String?>(null) }
-
-    // Dynamic data flow collection for real-time reactivity
     val allAdsState by viewModel.allAds.collectAsState()
     val allAdsList = allAdsState
-
-    // 1. Dynamic active channels based on existing ad quantities (Requirement 2)
-    // If a channel has 0 advertisement count, delete (hide) that channel label.
     val activeChannels = remember(allAdsList) {
         listOf("精选", "电商", "本地").filter { channel ->
             allAdsList.any { it.channel == channel }
         }
     }
+    val pagerChannels = remember(activeChannels) { buildPagerChannels(activeChannels) }
+    val pagerState = rememberPagerState(pageCount = { pagerChannels.size })
+    val selectedChannel = resolvePagerChannel(
+        pagerChannels = pagerChannels,
+        page = pagerState.settledPage,
+        fallbackChannel = viewModel.selectedChannel
+    )
+    val activeTagFilter = viewModel.activeFilters[selectedChannel]
+    val selectedChannelAds = remember(allAdsList, selectedChannel) {
+        allAdsList.filter { it.channel == selectedChannel }
+    }
+    val tagUiState = remember(selectedChannelAds, activeTagFilter) {
+        buildChannelTagUiState(
+            channelAds = selectedChannelAds,
+            activeTagFilter = activeTagFilter
+        )
+    }
 
-    // Auto-fallback/cleanup: if selected channel ceases to exist, select first active channel
     LaunchedEffect(activeChannels) {
         if (activeChannels.isNotEmpty() && !activeChannels.contains(viewModel.selectedChannel)) {
             viewModel.selectChannel(activeChannels.first())
+        }
+    }
+
+    LaunchedEffect(activeChannels) {
+        if (pagerChannels.isNotEmpty() && pagerState.currentPage > pagerChannels.lastIndex) {
+            pagerState.scrollToPage(pagerChannels.lastIndex)
+        }
+    }
+
+    LaunchedEffect(viewModel.selectedChannel, pagerChannels) {
+        val targetPage = findChannelPage(pagerChannels, viewModel.selectedChannel)
+        if (targetPage >= 0 && targetPage != pagerState.currentPage) {
+            pagerState.animateScrollToPage(targetPage)
+        }
+    }
+
+    LaunchedEffect(pagerState, pagerChannels) {
+        snapshotFlow { pagerState.settledPage }.collectLatest { page ->
+            if (page in pagerChannels.indices) {
+                val channel = resolvePagerChannel(
+                    pagerChannels = pagerChannels,
+                    page = page,
+                    fallbackChannel = viewModel.selectedChannel
+                )
+                if (viewModel.selectedChannel != channel) {
+                    viewModel.selectChannel(channel)
+                }
+                playingAdId = null
+            }
+        }
+    }
+
+    LaunchedEffect(tagUiState.allSelectableTags, activeTagFilter, selectedChannel) {
+        if (activeTagFilter != null && activeTagFilter !in tagUiState.allSelectableTags) {
+            viewModel.clearTagFilter(selectedChannel)
         }
     }
 
@@ -158,7 +202,6 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Channel Tabs Header Indicator Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -174,13 +217,18 @@ fun HomeScreen(
                     }
             ) {
                 activeChannels.forEach { channelName ->
-                    val isSelected = viewModel.selectedChannel == channelName
+                    val isSelected = selectedChannel == channelName
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .clickable {
-                                viewModel.selectChannel(channelName)
-                                playingAdId = null // Pause any active video
+                                val targetPage = findChannelPage(pagerChannels, channelName)
+                                if (targetPage >= 0) {
+                                    coroutineScope.launch {
+                                        playingAdId = null
+                                        pagerState.animateScrollToPage(targetPage)
+                                    }
+                                }
                             }
                             .drawBehind {
                                 if (isSelected) {
@@ -199,99 +247,25 @@ fun HomeScreen(
                     ) {
                         Text(
                             text = channelName,
-                            style = TextStyle(
-                                color = if (isSelected) AccentNeonBlue else SlateTextSecondary,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                fontSize = 14.sp
-                            )
+                            color = if (isSelected) AccentNeonBlue else SlateTextSecondary,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 14.sp
                         )
                     }
                 }
             }
 
-            // 2. Dynamic tag filter generation based on active channel's ads (Requirement 1 & 2)
-            // - Any tag visible must have at least 3 advertisements in the current channel (Requirement 1)
-            // - Any tag with 0 matching ads under the current channel is deleted (Requirement 2)
-            val activeTagFilter = viewModel.activeFilters[viewModel.selectedChannel]
-            val channelTags = remember(allAdsList, viewModel.selectedChannel) {
-                val currentChannelAds = allAdsList.filter { it.channel == viewModel.selectedChannel }
-                val tagCounts = currentChannelAds.flatMap { it.getTagList() }
-                    .groupBy { it }
-                    .mapValues { it.value.size }
-                
-                // "at least guarantee each tag has 3 advertisements" => filter for counts >= 3
-                // Requirement 2: filter out "小图", "视频" keywords from UI display
-                val forbiddenKeywords = listOf("小图", "视频")
-                val keptOtherTags = tagCounts.filter { it.value >= 3 }
-                    .keys
-                    .filter { it !in forbiddenKeywords }
-                    .toList()
-                listOf("全部") + keptOtherTags
-            }
-
-            // Fallback clear if chosen tag filter is suddenly filtered out or removed
-            LaunchedEffect(channelTags) {
-                if (activeTagFilter != null && !channelTags.contains(activeTagFilter)) {
-                    viewModel.clearTagFilter(viewModel.selectedChannel)
+            HomeTagFilterBar(
+                tagUiState = tagUiState,
+                activeTagFilter = activeTagFilter,
+                onSelectAll = {
+                    viewModel.clearTagFilter(selectedChannel)
+                },
+                onSelectTag = { tag ->
+                    viewModel.toggleTagFilter(selectedChannel, tag)
                 }
-            }
+            )
 
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(channelTags) { tag ->
-                    val isAll = tag == "全部"
-                    val isSelected = if (isAll) {
-                        activeTagFilter == null
-                    } else {
-                        activeTagFilter == tag
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                if (isAll) {
-                                    viewModel.clearTagFilter(viewModel.selectedChannel)
-                                } else {
-                                    viewModel.toggleTagFilter(viewModel.selectedChannel, tag)
-                                }
-                            }
-                            .background(
-                                if (isSelected) PolishPillActive else SlateCharcoal
-                            )
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            if (isSelected && !isAll) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = PolishTextOnActive,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
-                            Text(
-                                text = if (isAll) tag else "#$tag",
-                                style = TextStyle(
-                                    color = if (isSelected) PolishTextOnActive else SlateTextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Simulated Pull Down Loading Banner
             AnimatedVisibility(
                 visible = viewModel.isRefreshing,
                 enter = expandVertically() + fadeIn(),
@@ -323,167 +297,441 @@ fun HomeScreen(
                 }
             }
 
-            // Ads Flow Column
-            val rawAds by viewModel.currentChannelAds.collectAsState()
-            val filteredAds = remember(rawAds, activeTagFilter) {
-                if (activeTagFilter == null) {
-                    rawAds
-                } else {
-                    rawAds.filter { it.getTagList().contains(activeTagFilter) }
-                }
-            }
-
-            if (filteredAds.isEmpty()) {
+            if (activeChannels.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Info,
-                            contentDescription = null,
-                            tint = SlateTextSecondary,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Text(
-                            text = "该过滤标签暂未发现广告内容",
-                            color = SlateTextSecondary,
-                            fontSize = 14.sp
-                        )
-                        Button(
-                            onClick = { viewModel.clearTagFilter(viewModel.selectedChannel) },
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentNeonBlue)
-                        ) {
-                            Text("返回显示全部", color = SlateDark, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "当前没有可展示的频道内容",
+                        color = SlateTextSecondary,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                PullToRefreshBox(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    isRefreshing = viewModel.isRefreshing,
+                    onRefresh = {
+                        playingAdId = null
+                        viewModel.refreshContent(selectedChannel)
+                    }
+                ) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("channel_pager")
+                    ) { page ->
+                        val channel = pagerChannels[page]
+                        val channelAds = remember(allAdsList, channel) {
+                            allAdsList.filter { it.channel == channel }
+                        }
+                        val pageTagFilter = viewModel.activeFilters[channel]
+                        val refreshToken = viewModel.refreshTokens[channel] ?: 0
+                        val displayAds = remember(channelAds, pageTagFilter, refreshToken) {
+                            buildDisplayAds(
+                                channelAds = channelAds,
+                                activeTagFilter = pageTagFilter,
+                                refreshToken = refreshToken
+                            )
+                        }
+
+                        if (displayAds.isEmpty()) {
+                            EmptyChannelFilterState(
+                                onClearFilter = { viewModel.clearTagFilter(channel) }
+                            )
+                        } else {
+                            ChannelAdsPagerPage(
+                                ads = displayAds,
+                                listState = listStates[channel] ?: LazyListState(),
+                                refreshToken = refreshToken,
+                                playingAdId = playingAdId,
+                                onPlayClick = { adId ->
+                                    playingAdId = if (playingAdId == adId) null else adId
+                                },
+                                onCardClick = { adId ->
+                                    viewModel.onAdClicked(adId)
+                                    onNavigateToDetail(adId)
+                                },
+                                onLikeClick = { adId -> viewModel.toggleLike(adId) },
+                                onFavClick = { adId -> viewModel.toggleFavorite(adId) },
+                                onShareClick = { adId -> viewModel.shareAd(adId) },
+                                onExpose = { adId -> viewModel.onAdExposed(adId) }
+                            )
                         }
                     }
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f)
-                        .testTag("ads_lazy_column"),
-                    state = activeState,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+            }
+        }
+    }
+}
+
+private data class ChannelTagUiState(
+    val allSelectableTags: Set<String>,
+    val primaryTags: List<String>,
+    val overflowTags: List<String>
+)
+
+internal fun buildPagerChannels(activeChannels: List<String>): List<String> {
+    return activeChannels
+}
+
+internal fun findChannelPage(pagerChannels: List<String>, channel: String): Int {
+    return pagerChannels.indexOf(channel)
+}
+
+internal fun resolvePagerChannel(
+    pagerChannels: List<String>,
+    page: Int,
+    fallbackChannel: String
+): String {
+    return pagerChannels.getOrNull(page) ?: fallbackChannel
+}
+
+private fun buildChannelTagUiState(
+    channelAds: List<AdEntity>,
+    activeTagFilter: String?
+): ChannelTagUiState {
+    val forbiddenKeywords = setOf("小图", "视频")
+    val sortedTags = channelAds
+        .flatMap { it.getTagList() }
+        .groupingBy { it }
+        .eachCount()
+        .filter { (tag, count) -> count >= 3 && tag !in forbiddenKeywords }
+        .toList()
+        .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
+        .map { it.first }
+
+    val primaryTags = sortedTags.take(3).toMutableList()
+    if (activeTagFilter != null && activeTagFilter in sortedTags && activeTagFilter !in primaryTags) {
+        if (primaryTags.size >= 3) {
+            primaryTags[primaryTags.lastIndex] = activeTagFilter
+        } else {
+            primaryTags += activeTagFilter
+        }
+    }
+
+    val distinctPrimaryTags = primaryTags.distinct()
+    val overflowTags = sortedTags.filterNot { it in distinctPrimaryTags }
+    return ChannelTagUiState(
+        allSelectableTags = sortedTags.toSet(),
+        primaryTags = distinctPrimaryTags,
+        overflowTags = overflowTags
+    )
+}
+
+private fun buildDisplayAds(
+    channelAds: List<AdEntity>,
+    activeTagFilter: String?,
+    refreshToken: Int
+): List<AdEntity> {
+    val filteredAds = if (activeTagFilter == null) {
+        channelAds
+    } else {
+        channelAds.filter { activeTagFilter in it.getTagList() }
+    }
+
+    return if (refreshToken > 0 && filteredAds.size > 1) {
+        filteredAds.shuffled(Random(refreshToken))
+    } else {
+        filteredAds
+    }
+}
+
+@Composable
+private fun HomeTagFilterBar(
+    tagUiState: ChannelTagUiState,
+    activeTagFilter: String?,
+    onSelectAll: () -> Unit,
+    onSelectTag: (String) -> Unit
+) {
+    var moreMenuExpanded by remember(tagUiState.overflowTags) { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterPill(
+                label = "全部",
+                isSelected = activeTagFilter == null,
+                onClick = onSelectAll,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+
+            tagUiState.primaryTags.forEach { tag ->
+                val isAll = tag == "全部"
+                FilterPill(
+                    label = "#$tag",
+                    isSelected = activeTagFilter == tag,
+                    showCheck = activeTagFilter == tag,
+                    onClick = { onSelectTag(tag) },
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+        }
+
+        if (tagUiState.overflowTags.isNotEmpty()) {
+            Box {
+                FilterPill(
+                    label = "更多",
+                    isSelected = false,
+                    trailingIcon = Icons.Default.ArrowDropDown,
+                    onClick = { moreMenuExpanded = true }
+                )
+                DropdownMenu(
+                    expanded = moreMenuExpanded,
+                    onDismissRequest = { moreMenuExpanded = false },
+                    containerColor = SlateCard
                 ) {
-                    item {
-                        // Quick manual refresh trigger banner
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    Brush.linearGradient(listOf(SlateCard, SlateCharcoal))
-                                )
-                                .clickable { viewModel.refreshContent() }
-                                .padding(12.dp)
-                        ) {
+                    Column(
+                        modifier = Modifier
+                            .widthIn(min = 220.dp, max = 320.dp)
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        tagUiState.overflowTags.chunked(3).forEach { rowTags ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "刷新",
-                                        tint = AccentNeonBlue
+                                rowTags.forEach { tag ->
+                                    OverflowTagChip(
+                                        label = "#$tag",
+                                        isSelected = activeTagFilter == tag,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = {
+                                            moreMenuExpanded = false
+                                            onSelectTag(tag)
+                                        }
                                     )
-                                    Column {
-                                        Text(
-                                            text = "换一批推荐？一键智能刷新",
-                                            color = Color.White,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "根据曝光反馈，AI 自动调整展现权重",
-                                            color = SlateTextSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
                                 }
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null,
-                                    tint = SlateTextSecondary,
-                                    modifier = Modifier.size(12.dp)
-                                )
+                                repeat(3 - rowTags.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
                             }
                         }
                     }
-
-                    items(filteredAds, key = { it.id }) { ad ->
-                        // Automatically register Exposure when rendering card on viewport!
-                        LaunchedEffect(ad.id) {
-                            viewModel.onAdExposed(ad.id)
-                        }
-
-                        // Render distinctive card based on style
-                        when (ad.cardType) {
-                            "video" -> VideoAdCard(
-                                ad = ad,
-                                isPlayingInFeed = playingAdId == ad.id,
-                                onPlayClick = {
-                                    playingAdId = if (playingAdId == ad.id) null else ad.id
-                                },
-                                onCardClick = {
-                                    viewModel.onAdClicked(ad.id)
-                                    onNavigateToDetail(ad.id)
-                                },
-                                onLikeClick = { viewModel.toggleLike(ad.id) },
-                                onFavClick = { viewModel.toggleFavorite(ad.id) },
-                                onShareClick = { viewModel.shareAd(ad.id) }
-                            )
-                            "small_image" -> SmallImageAdCard(
-                                ad = ad,
-                                onCardClick = {
-                                    viewModel.onAdClicked(ad.id)
-                                    onNavigateToDetail(ad.id)
-                                },
-                                onLikeClick = { viewModel.toggleLike(ad.id) },
-                                onFavClick = { viewModel.toggleFavorite(ad.id) },
-                                onShareClick = { viewModel.shareAd(ad.id) }
-                            )
-                            else -> BigImageAdCard(
-                                ad = ad,
-                                onCardClick = {
-                                    viewModel.onAdClicked(ad.id)
-                                    onNavigateToDetail(ad.id)
-                                },
-                                onLikeClick = { viewModel.toggleLike(ad.id) },
-                                onFavClick = { viewModel.toggleFavorite(ad.id) },
-                                onShareClick = { viewModel.shareAd(ad.id) }
-                            )
-                        }
-                    }
-
-                    item {
-                        // Spacing at the bottom of the feed list
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "— 已经到底部啦，点击顶部刷新获得新广告 —",
-                                color = SlateTextSecondary,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterPill(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    showCheck: Boolean = false,
+    trailingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .background(if (isSelected) PolishPillActive else SlateCharcoal)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (showCheck) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = PolishTextOnActive,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+            Text(
+                text = label,
+                color = if (isSelected) PolishTextOnActive else SlateTextSecondary,
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (trailingIcon != null) {
+                Icon(
+                    imageVector = trailingIcon,
+                    contentDescription = null,
+                    tint = if (isSelected) PolishTextOnActive else SlateTextSecondary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverflowTagChip(
+    label: String,
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        color = if (isSelected) PolishPillActive else SlateCharcoal,
+        tonalElevation = 0.dp,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isSelected) AccentNeonBlue.copy(alpha = 0.35f) else PolishBorder
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = PolishTextOnActive,
+                    modifier = Modifier
+                        .size(12.dp)
+                        .padding(end = 2.dp)
+                )
+            }
+            Text(
+                text = label,
+                color = if (isSelected) PolishTextOnActive else SlateTextPrimary,
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyChannelFilterState(
+    onClearFilter: () -> Unit
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = null,
+                tint = SlateTextSecondary,
+                modifier = Modifier.size(48.dp)
+            )
+            Text(
+                text = "该过滤标签暂未发现广告内容",
+                color = SlateTextSecondary,
+                fontSize = 14.sp
+            )
+            Button(
+                onClick = onClearFilter,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentNeonBlue)
+            ) {
+                Text("返回显示全部", color = SlateDark, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelAdsPagerPage(
+    ads: List<AdEntity>,
+    listState: LazyListState,
+    refreshToken: Int,
+    playingAdId: String?,
+    onPlayClick: (String) -> Unit,
+    onCardClick: (String) -> Unit,
+    onLikeClick: (String) -> Unit,
+    onFavClick: (String) -> Unit,
+    onShareClick: (String) -> Unit,
+    onExpose: (String) -> Unit
+) {
+    LaunchedEffect(refreshToken) {
+        if (refreshToken > 0) {
+            listState.scrollToItem(0)
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("ads_lazy_column"),
+        state = listState,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        items(ads, key = { it.id }) { ad ->
+            LaunchedEffect(ad.id) {
+                onExpose(ad.id)
+            }
+
+            when (ad.cardType) {
+                "video" -> VideoAdCard(
+                    ad = ad,
+                    isPlayingInFeed = playingAdId == ad.id,
+                    onPlayClick = { onPlayClick(ad.id) },
+                    onCardClick = { onCardClick(ad.id) },
+                    onLikeClick = { onLikeClick(ad.id) },
+                    onFavClick = { onFavClick(ad.id) },
+                    onShareClick = { onShareClick(ad.id) }
+                )
+
+                "small_image" -> SmallImageAdCard(
+                    ad = ad,
+                    onCardClick = { onCardClick(ad.id) },
+                    onLikeClick = { onLikeClick(ad.id) },
+                    onFavClick = { onFavClick(ad.id) },
+                    onShareClick = { onShareClick(ad.id) }
+                )
+
+                else -> BigImageAdCard(
+                    ad = ad,
+                    onCardClick = { onCardClick(ad.id) },
+                    onLikeClick = { onLikeClick(ad.id) },
+                    onFavClick = { onFavClick(ad.id) },
+                    onShareClick = { onShareClick(ad.id) }
+                )
+            }
+        }
+
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "— 已经到底部啦，下拉继续换一批 —",
+                    color = SlateTextSecondary,
+                    fontSize = 11.sp
+                )
             }
         }
     }
@@ -907,10 +1155,11 @@ fun AISummaryBox(summary: String) {
 fun TagsListRow(tags: List<String>) {
     val forbiddenKeywords = listOf("小图", "视频")
     val filteredTags = tags.filter { it !in forbiddenKeywords }
-    
-    Row(
+
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        mainAxisSpacing = 6.dp,
+        crossAxisSpacing = 6.dp
     ) {
         filteredTags.forEach { tag ->
             Box(

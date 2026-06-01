@@ -24,6 +24,8 @@ class TictokAdvertRepository(private val adDao: AdDao) {
 
     fun getAdByIdFlow(id: String): Flow<AdEntity?> = adDao.getAdByIdFlow(id)
 
+    fun getCommentsByAdIdFlow(adId: String): Flow<List<CommentEntity>> = adDao.getCommentsByAdIdFlow(adId)
+
     // Stats aggregates
     val allEventsFlow: Flow<List<AnalyticsEventEntity>> = adDao.getAllAnalyticsEventsFlow()
     val exposureCountFlow: Flow<Int> = adDao.getExposureCountFlow()
@@ -166,6 +168,19 @@ class TictokAdvertRepository(private val adDao: AdDao) {
         Log.d(TAG, "All stats reset successfully.")
     }
 
+    suspend fun addComment(adId: String, content: String, authorName: String = "我") {
+        val normalizedContent = content.trim()
+        if (normalizedContent.isEmpty()) return
+        val ad = adDao.getAdById(adId) ?: return
+        adDao.insertComment(
+            CommentEntity(
+                adId = ad.id,
+                authorName = authorName,
+                content = normalizedContent
+            )
+        )
+    }
+
     /**
      * Downloads a video from URL and saves it to internal storage for offline playback.
      */
@@ -224,6 +239,7 @@ class TictokAdvertRepository(private val adDao: AdDao) {
             require(bundle.ads.size >= 100) { "Bundled ad package contains fewer than 100 records." }
 
             adDao.clearAllAnalytics()
+            adDao.clearAllComments()
             adDao.clearAllAds()
             adDao.insertAds(bundle.ads)
             prefs.edit().putString(OFFLINE_AD_VERSION_KEY, bundle.version).apply()
@@ -243,6 +259,7 @@ class TictokAdvertRepository(private val adDao: AdDao) {
     private suspend fun populateFallbackGeneratedAds() {
         Log.d(TAG, "Populating database with fallback generated ads...")
 
+        adDao.clearAllComments()
         adDao.clearAllAds()
 
         val channels = listOf("精选", "电商", "本地")

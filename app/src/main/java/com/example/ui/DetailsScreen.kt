@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,7 +27,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -35,9 +35,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.example.data.AdEntity
+import com.example.data.CommentEntity
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,9 +53,13 @@ fun DetailsScreen(
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    // Fetch the reactive ad entity
     val allAds by viewModel.allAds.collectAsState()
     val ad = remember(allAds, adId) { allAds.firstOrNull { it.id == adId } }
+    val commentsFlow = remember(adId) { viewModel.getComments(adId) }
+    val comments by commentsFlow.collectAsState(initial = emptyList())
+    var commentInput by rememberSaveable(adId) { mutableStateOf("") }
+    val normalizedComment = commentInput.trim()
+    val canSubmitComment = normalizedComment.isNotEmpty()
 
     if (ad == null) {
         Box(
@@ -63,14 +71,10 @@ fun DetailsScreen(
         return
     }
 
-    // Interactive button animation keyframes
     var likeScale by remember { mutableStateOf(1f) }
     var favoriteScale by remember { mutableStateOf(1f) }
-
-    // Reference to standard VideoView to save progress during exit lifecycle
     var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
 
-    // On Detail Exit - save video progress
     DisposableEffect(Unit) {
         onDispose {
             videoViewRef?.let { view ->
@@ -116,7 +120,6 @@ fun DetailsScreen(
         },
         containerColor = SlateDark,
         bottomBar = {
-            // Point-Of-Action direct CTA bottom bar
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -138,7 +141,6 @@ fun DetailsScreen(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pulsing dynamic direct purchase CTA button
                     val infiniteTransition = rememberInfiniteTransition(label = "pulsing")
                     val pulseScale by infiniteTransition.animateFloat(
                         initialValue = 1f,
@@ -151,7 +153,6 @@ fun DetailsScreen(
 
                     Button(
                         onClick = {
-                            // Trigger dynamic Advertiser click event
                             viewModel.onAdClicked(ad.id)
                         },
                         modifier = Modifier
@@ -192,7 +193,6 @@ fun DetailsScreen(
                 .padding(innerPadding)
                 .verticalScroll(scrollState)
         ) {
-            // Media Hub Area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -223,9 +223,7 @@ fun DetailsScreen(
                                     setVideoPath(ad.videoSourcePath())
                                     setOnPreparedListener { mp ->
                                         mp.isLooping = true
-                                        // Start audio enabled in details page for premium viewing experience
                                         mp.setVolume(1f, 1f)
-                                        // Resume play position continuation beautifully from feed!
                                         val savedPos = viewModel.getVideoProgress(adId)
                                         if (savedPos > 0) {
                                             seekTo(savedPos)
@@ -242,7 +240,6 @@ fun DetailsScreen(
                                 videoView.stopPlayback()
                             }
                         )
-                        // Clickable Overlay Box to control play/pause and capture taps
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -287,9 +284,9 @@ fun DetailsScreen(
                 }
             }
 
-            // Core Ad Information Column
-            Column(
-                modifier = Modifier
+                // Core Ad Information Column
+                Column(
+                    modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -347,7 +344,6 @@ fun DetailsScreen(
                     }
                 }
 
-                // Title and Body Desciprtion
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         text = ad.title,
@@ -364,7 +360,6 @@ fun DetailsScreen(
                     )
                 }
 
-                // High Tech AI Generated Summary Box
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -409,7 +404,6 @@ fun DetailsScreen(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Brief tag links
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             mainAxisSpacing = 8.dp,
@@ -434,7 +428,6 @@ fun DetailsScreen(
                     }
                 }
 
-                // Metric stats indicators
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(24.dp),
@@ -465,7 +458,6 @@ fun DetailsScreen(
                     }
                 }
 
-                // Interactive Buttons Panel (Like, Favorite, Share)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -475,7 +467,6 @@ fun DetailsScreen(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Like Button with dynamic click spring zoom animation
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
@@ -504,7 +495,6 @@ fun DetailsScreen(
                         )
                     }
 
-                    // Favorite Button
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
@@ -533,7 +523,6 @@ fun DetailsScreen(
                         )
                     }
 
-                    // Share Button
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickable {
@@ -554,6 +543,20 @@ fun DetailsScreen(
                         )
                     }
                 }
+
+                CommentsSection(
+                    comments = comments,
+                    commentInput = commentInput,
+                    onCommentInputChange = { updated ->
+                        commentInput = updated.take(AdvertViewModel.COMMENT_MAX_LENGTH)
+                    },
+                    onSubmitComment = {
+                        viewModel.addComment(ad.id, commentInput)
+                        commentInput = ""
+                    },
+                    canSubmitComment = canSubmitComment,
+                    maxLength = AdvertViewModel.COMMENT_MAX_LENGTH
+                )
             }
         }
     }
@@ -568,7 +571,158 @@ fun MetricIndicator(name: String, value: String, tint: Color) {
     }
 }
 
-// Robust legacy compatible FlowRow implementation
+@Composable
+private fun CommentsSection(
+    comments: List<CommentEntity>,
+    commentInput: String,
+    onCommentInputChange: (String) -> Unit,
+    onSubmitComment: () -> Unit,
+    canSubmitComment: Boolean,
+    maxLength: Int
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, PolishBorder),
+        colors = CardDefaults.cardColors(containerColor = SlateCard)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "评论 (${comments.size})",
+                    color = SlateTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${commentInput.length}/$maxLength",
+                    color = SlateTextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+
+            OutlinedTextField(
+                value = commentInput,
+                onValueChange = onCommentInputChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("comment_input"),
+                minLines = 3,
+                maxLines = 5,
+                placeholder = {
+                    Text("写下你对这条广告的看法...", color = SlateTextSecondary)
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = SlateCharcoal,
+                    unfocusedContainerColor = SlateCharcoal,
+                    focusedBorderColor = AccentNeonBlue,
+                    unfocusedBorderColor = PolishBorder,
+                    focusedTextColor = SlateTextPrimary,
+                    unfocusedTextColor = SlateTextPrimary,
+                    cursorColor = AccentNeonBlue
+                )
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(
+                    onClick = onSubmitComment,
+                    enabled = canSubmitComment,
+                    modifier = Modifier.testTag("comment_submit_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentNeonBlue,
+                        disabledContainerColor = SlateCharcoal
+                    )
+                ) {
+                    Text(
+                        text = "发布评论",
+                        color = if (canSubmitComment) SlateDark else SlateTextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (comments.isEmpty()) {
+                Text(
+                    text = "还没有评论，来发布第一条观点吧。",
+                    color = SlateTextSecondary,
+                    fontSize = 13.sp
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    comments.forEach { comment ->
+                        CommentItem(comment = comment)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentItem(comment: CommentEntity) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(SlateCharcoal, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = comment.authorName.take(1),
+                color = AccentNeonBlue,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = comment.authorName,
+                    color = SlateTextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = formatCommentTime(comment.createdAt),
+                    color = SlateTextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+            Text(
+                text = comment.content,
+                color = SlateTextSecondary,
+                fontSize = 13.sp,
+                lineHeight = 19.sp
+            )
+        }
+    }
+}
+
+private fun formatCommentTime(createdAt: Long): String {
+    return SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(createdAt))
+}
+
 @Composable
 fun FlowRow(
     modifier: Modifier = Modifier,
@@ -619,11 +773,7 @@ fun FlowRow(
         } else {
             totalWidth.coerceIn(constraints.minWidth, constraints.maxWidth)
         }
-        val height = if (constraints.hasBoundedHeight) {
-            constraints.maxHeight
-        } else {
-            currentY.coerceIn(constraints.minHeight, constraints.maxHeight)
-        }
+        val height = currentY.coerceIn(constraints.minHeight, constraints.maxHeight)
 
         layout(width, height) {
             var x = 0
